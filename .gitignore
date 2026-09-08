@@ -1,0 +1,40 @@
+# === Gowin IDE / Tang Nano 9k build artifacts ===
+impl/
+*.gowin_pack.bin
+*.fs
+*.log
+*.rpt
+*.rpt.html
+*.posp
+*.adc.html
+
+# Gowin project cache/backup
+*.bak
+*.tmp
+gwsp_project_backup/
+
+# Synthesis / Place & Route intermediate files
+*.vg
+*.ys
+*.json.bak
+
+# === Simulation outputs (if using iverilog/gtkwave etc.) ===
+*.vcd
+*.out
+a.out
+*.o
+*.vvp
+
+# === OS-specific junk files ===
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# === Editor/IDE folders ===
+.vscode/
+.idea/
+*.swp
+
+# === Optional: keep bitstreams out of git (large binary files) ===
+# Uncomment if you don't want to track generated bitstreams
+# *.bin
