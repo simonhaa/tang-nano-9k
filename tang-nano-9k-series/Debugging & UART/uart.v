@@ -4,7 +4,7 @@ module uart
 #(
     parameter DELAY_FRAMES = 234 // 27 mHz, 115200 bits per second is the default baud rate
 // DELAY_FRAMES is the number of clock pulses required to reach the desired baud rate
-// 27 mHz / 115200 bits per second = 
+// 27 mHz / 115200 bits per second ~234
 )
 (
     input clk,
