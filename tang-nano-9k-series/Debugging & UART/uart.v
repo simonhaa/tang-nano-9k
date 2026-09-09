@@ -24,6 +24,7 @@ module uart
     reg [7:0] dataIn = 0;
     reg byteReady;
 
+    // defining the states for the receiver
     localparam RX_STATE_IDLE = 0;
     localparam RX_STATE_START_BIT = 1;
     localparam RX_STATE_READ_WAIT = 2;
@@ -90,10 +91,96 @@ module uart
 
     assign uart_tx = txPinRegister;
 
+    // purpose is to send a message from memory, so we need to keep track of the current byte
     localparam MEMORY_LENGTH = 12;
-    reg [7:0] testMemory [MEMORY_LENGTH-1:0];
+    reg [7:0] testMemory [MEMORY_LENGTH-1:0]; // defines a memory of 12 bytes, each 8 bits wide
 
-    
+    initial begin
+        testMemory[0] = "L";
+        testMemory[1] = "u";
+        testMemory[2] = "s";
+        testMemory[3] = "h";
+        testMemory[4] = "a";
+        testMemory[5] = "y";
+        testMemory[6] = " ";
+        testMemory[7] = "L";
+        testMemory[8] = "a";
+        testMemory[9] = "b";
+        testMemory[10] = "s";
+        testMemory[10] = " ";
+    end
+    // initializes the memory
+
+    // defining the states for the transmitter
+    localparam TX_STATE_IDLE = 0;
+    localparam TX_STATE_START_BIT = 1;
+    localparam TX_STATE_WRITE = 2;
+    localparam TX_STATE_STOP_BIT = 3;
+    localparam TX_STATE_DEBOUNCE = 4;
+
+    // State transition logic for transmitter
+    always @(posedge clk) begin
+        case (txState)
+            TX_STATE_IDLE: begin
+                if (btn1 == 0) begin // waits for the button to be pressed (active low)
+                    txState <= TX_STATE_START_BIT;
+                    txCounter <= 0;
+                    txByteCounter <= 0;
+                end else
+                    txPinRegister <= 1;
+            end
+            TX_STATE_START_BIT: begin
+                txPinRegister <= 0;
+                if ((txCounter + 1) == DELAY FRAMES) begin
+                    txState <= TX_STATE_WRITE;
+                    dataOut <= testMemory[txByteCounter]; // puts the next byte into dataOut
+                    txBitNumber <= 0; // resets to 0
+                    txCounter <= 0;
+                end else
+                    txCounter <= txCounter + 1;
+            end
+            TX_STATE_WRITE: begin
+                txPinRegister <= dataOut[txBitNumber];
+                // sets the tx pin to the current bit of the current byte
+                if ((txCounter + 1) == DELAY_FRAMES) begin
+                    // checks if we're on the last bit --> stop
+                    // else, increments the bit number and keeps the current state
+                    if (txBitNumber == 3'b111) begin
+                        txState <= TX_STATE_STOP_BIT;
+                    end else begin
+                        txState <= TX_STATE_WRITE;
+                        txBitNumber <= txBitNumber + 1;
+                    end
+                    txCounter <= 0;
+                end else 
+                    txCounter <= txCounter + 1;
+            end
+            TX_STATE_STOP_BIT: begin
+                txPinRegister <= 1;
+                if ((txCounter + 1) == DELAY_FRAMES) begin
+                    // after waiting DELAY_FRAMES, checks if there are any other bytes to send
+                    // repeats if there are, goes to the debounce state if not
+                    if (txByteCounter == MEMORY_LENGTH - 1) begin
+                        txState <= TX_STATE_DEBOUNCE;
+                    end else begin
+                        txByteCounter <= txByteCounter + 1;
+                        txState <= TX_STATE_START_BIT;
+                    end
+                    txCounter <= 0;
+                end else 
+                    txCounter <= txCounter + 1;
+            end
+            TX_STATE_DEBOUNCE: begin
+                if (txCounter == 23'b111111111111111111) begin
+                    if (btn1 == 1)
+                        txState <= TX_STATE_IDLE;
+                end else
+                    txCounter <= txCounter + 1;
+            end
+            // waits a minimum time on top of sending time and makes sure the button is released after this
+            // ensures that for each button press, only one transmission event
+        endcase
+    end
 
 endmodule
 
