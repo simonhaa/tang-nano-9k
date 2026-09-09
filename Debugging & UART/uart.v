@@ -80,5 +80,20 @@ module uart
         end
     end
 
+    // data transmission
+    reg [3:0] txState = 0;
+    reg [24:0] txCounter = 0;
+    reg [7:0] dataOut = 0;
+    reg txPinRegister = 1;
+    reg [2:0] txBitNumber = 0;
+    reg [3:0] txByteCounter = 0;
+
+    assign uart_tx = txPinRegister;
+
+    localparam MEMORY_LENGTH = 12;
+    reg [7:0] testMemory [MEMORY_LENGTH-1:0];
+
+    
+
 endmodule
 
