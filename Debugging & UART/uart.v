@@ -1,64 +1,87 @@
 `default_nettype none
-
+// -----------------------------------------------------------------------
+// Simple UART (Universal Asynchronous Receiver/Transmitter)
+//
+// - Receives 8-bit bytes over `uart_rx` and displays the low 6 bits on
+//   `led` (active-low LEDs, since the value is inverted before driving).
+// - Transmits a fixed 12-byte message stored in `testMemory` over
+//   `uart_tx` whenever `btn1` is pressed.
+// - No parity bit, 1 start bit, 1 stop bit (standard 8N1 framing).
+// -----------------------------------------------------------------------
 module uart
 #(
-    parameter DELAY_FRAMES = 234 // 27 mHz, 115200 bits per second is the default baud rate
-// DELAY_FRAMES is the number of clock pulses required to reach the desired baud rate
-// 27 mHz / 115200 bits per second ~234
+    // Number of clock cycles that make up one UART bit period
+    // At a 27 MHz clock and 115200 baud: 27,000,000 / 115,200 = ~234
+    parameter DELAY_FRAMES = 234
 )
 (
-    input clk,
-    input uart_rx,
-    output uart_tx,
-    output reg [5:0] led,
-    input btn1
+    input clk, // System clock of the board (27 MHz)
+    input uart_rx, // Serial data in (idle high, active low)
+    output uart_tx, // Serial data out
+    output reg [5:0] led, // 6 LEDs, driven active-low from received byte
+    input btn1 // Push button (active low) transmission trigger
 );
 
+    // Half of one bit period. Used so that, after detecting the falling start-bit edge,
+    // we wait to the *middle* of the following bits before sampling them. Sampling in the middle
+    // avoid errors from clock drift near bit edges
     localparam HALF_DELAY_WAIT = (DELAY_FRAMES / 2);
-    // used to read in the middle of the data transmission because, if we read at the beginning of the bit pulse,
-    // there might be some drifting & we'd have to account for the .375 bits required (since 27 mHz / 115200 is ~234)
 
-    reg [3:0] rxState = 0;
-    reg [12:0] rxCounter = 0;
-    reg [2:0] rxBitNumber = 0;
-    reg [7:0] dataIn = 0;
-    reg byteReady;
+    // RECEIVER STATE
+    reg [3:0] rxState = 0;              // Current state of the RX state machine
+    reg [12:0] rxCounter = 0;           // Counts clock cycles within the current bit period
+    reg [2:0] rxBitNumber = 0;          // Which data bit (0-7) is currently being received
+    reg [7:0] dataIn = 0;               // Shift register that accumulates the incoming byte
+    reg byteReady;                      // Pulses/holds high for one cycle when a full byte has arrived
 
-    // defining the states for the receiver
-    localparam RX_STATE_IDLE = 0;
-    localparam RX_STATE_START_BIT = 1;
-    localparam RX_STATE_READ_WAIT = 2;
-    localparam RX_STATE_READ = 3;
-    localparam RX_STATE_STOP_BIT = 5;
+    // RX state machine states
+    localparam RX_STATE_IDLE = 0;       // Waiting for the start bit (line goes low)
+    localparam RX_STATE_START_BIT = 1;  // Confirming the start bit, waiting to reach bit-middle
+    localparam RX_STATE_READ_WAIT = 2;  // Waiting out the rest of a bit period before sampling
+    localparam RX_STATE_READ = 3;       // Sampling the current data bit
+    localparam RX_STATE_STOP_BIT = 4;   // Waiting out the stop bit period
 
     // State transition logic for receiver
     always @(posedge clk) begin
         case (rxState)
+
+            // Idle: watches the RX line. UART idles high, so a transitions to 0 should signal the start bit.
             RX_STATE_IDLE: begin
-                if (uart_rx == 0) begin // active-low, so waiting for it to be pulled low to begin
+                if (uart_rx == 0) begin
                     rxState <= RX_STATE_START_BIT;
-                    rxCounter <= 1; // includes the current clock pulse 
+                    rxCounter <= 1; // count this clock edge as cycle 1 
                     rxBitNumber <= 0;
-                    byteReady <= 0;
+                    byteReady <= 0; // clears any previous 'byte ready' flag
                 end
             end
+
+            // Start bit: waits until we're halfway through the start bit period.
+            // Lands us in the middle of the next bit (bit 0), keeping every subsequent sample centered on its bit
             RX_STATE_START_BIT: begin
-                if (rxCounter == HALF_DELAY_WAIT) begin // initially waits half a bit frame in order to be in the middle
+                if (rxCounter == HALF_DELAY_WAIT) begin
                     rxState <= RX_STATE_READ_WAIT;
-                    rxCounter <= 1; // includes current clock pulse
+                    rxCounter <= 1; // counts this clock edge as cycle 1
                 end else
                     rxCounter <= rxCounter + 1;
             end
+
+            // Read wait: count out the remainder of a full bit period so that, combined with the half delay,
+            // we land in the middle of the current data bit before sampling
             RX_STATE_READ_WAIT: begin
             rxCounter <= rxCounter + 1;
             if ((rxCounter + 1) == DELAY_FRAMES) begin // will be in the middle of the signal when it is read
                 rxState <= RX_STATE_READ;
                 end
             end
+
+            // Read: sample the RX line now
+            // Shifts it into dataIn
+            // Right shift makes it so that when we begin inserting at the MSB position, the first bit ends at the LSB position
+            // Successive bits shift previous data down, reconstructing the byte MSB-first as bits arrive LSB-first
             RX_STATE_READ: begin
                 rxCounter <= 1;
-                dataIn <= {uart_rx, dataIn[7:0]}; // right shift --> MSB first
-                rxBitNumber <= rxBitNumber + 1; // keeps track of how many bits we've read
+                dataIn <= {uart_rx, dataIn[7:0]};
+                rxBitNumber <= rxBitNumber + 1;
                 if (rxBitNumber == 3'b111)
                     rxState <= RX_STATE_STOP_BIT;
                 else
@@ -183,4 +206,3 @@ module uart
     end
 
 endmodule
-
