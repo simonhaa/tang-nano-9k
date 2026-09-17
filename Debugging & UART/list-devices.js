@@ -1,3 +1,3 @@
 const {SerialPort} = require('serialport');
 
-SerialPort.list(). then(console.log)
+SerialPort.list().then(console.log);
