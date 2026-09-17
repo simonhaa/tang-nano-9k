@@ -1,3 +1,12 @@
+# Node dependencies
 node_modules/
+npm-debug.log*
 
-.DS_Store/
+# Gowin / Lushay Labs Toolchain Build Artifacts
+*.fs
+*.bin
+*.log
+*.rpt
+*.pos
+build/
+impl/
