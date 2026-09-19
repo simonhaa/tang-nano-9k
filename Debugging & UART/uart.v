@@ -83,10 +83,12 @@ module uart
                 dataIn <= {uart_rx, dataIn[7:0]};
                 rxBitNumber <= rxBitNumber + 1;
                 if (rxBitNumber == 3'b111)
-                    rxState <= RX_STATE_STOP_BIT;
+                    rxState <= RX_STATE_STOP_BIT; // all 8 bits have been received, so we can move to the stop bit state
                 else
-                    rxState <= RX_STATE_READ_WAIT;
+                    rxState <= RX_STATE_READ_WAIT; // otherwise, wait out the rest of the bit period before sampling the next bit
             end
+
+            // Stop bit: wait out one more bit period, then declare byteReady and return to idle to wait for the next stop bit
             RX_STATE_STOP_BIT: begin
                 rxCounter <= rxCounter + 1;
                 if ((rxCounter + 1) == DELAY_FRAMES) begin
@@ -98,23 +100,26 @@ module uart
         endcase
     end
 
+    // When a byte is ready, latch the lower 6 bits into the LED register, inverting them to drive the active-low LEDs
+    // Inverted because the LEDs are wired active-low: a 1 in the register turns the LED off, and a 0 turns it on
     always @(posedge clk) begin
         if (byteReady) begin
             led <= ~dataIn[5:0];
         end
     end
 
-    // data transmission
-    reg [3:0] txState = 0;
-    reg [24:0] txCounter = 0;
-    reg [7:0] dataOut = 0;
-    reg txPinRegister = 1;
-    reg [2:0] txBitNumber = 0;
-    reg [3:0] txByteCounter = 0;
+    // TRANSMITTER STATE
+    reg [3:0] txState = 0;              // Current state of the TX state machine
+    reg [24:0] txCounter = 0;           // Counts clock cycles within the current bit period / debounce wait
+    reg [7:0] dataOut = 0;              // Byte currently being shifted out
+    reg txPinRegister = 1;              // Drives uart_tx; idles high per UART convention
+    reg [2:0] txBitNumber = 0;          // Which data bit (0--7) is currently being transmitted
+    reg [3:0] txByteCounter = 0;        // Index of the current byte within testMemory
 
     assign uart_tx = txPinRegister;
 
-    // purpose is to send a message from memory, so we need to keep track of the current byte
+    // Message to transmit, stored as a small ROM-like memory: one byte per character,
+    // sent out in order each time the button is pressed
     localparam MEMORY_LENGTH = 12;
     reg [7:0] testMemory [MEMORY_LENGTH-1:0]; // defines a memory of 12 bytes, each 8 bits wide
 
@@ -132,18 +137,20 @@ module uart
         testMemory[10] = "s";
         testMemory[10] = " ";
     end
-    // initializes the memory
 
-    // defining the states for the transmitter
-    localparam TX_STATE_IDLE = 0;
-    localparam TX_STATE_START_BIT = 1;
-    localparam TX_STATE_WRITE = 2;
-    localparam TX_STATE_STOP_BIT = 3;
-    localparam TX_STATE_DEBOUNCE = 4;
+    // TX state machine states          
+    localparam TX_STATE_IDLE = 0;       // Waiting for button press
+    localparam TX_STATE_START_BIT = 1;  // Driving the start bit (line low)
+    localparam TX_STATE_WRITE = 2;      // Shifting out the 8 data bits
+    localparam TX_STATE_STOP_BIT = 3;   // Driving the stop bit (line high)
+    localparam TX_STATE_DEBOUNCE = 4;   // Post-transmission delay + button-release check
 
     // State transition logic for transmitter
     always @(posedge clk) begin
         case (txState)
+
+            // Idle: line stays high (idle) until the button is pressed (active low)
+            // When pressed, start sending from the first byte in testMemory, and reset the counters
             TX_STATE_IDLE: begin
                 if (btn1 == 0) begin // waits for the button to be pressed (active low)
                     txState <= TX_STATE_START_BIT;
@@ -152,19 +159,25 @@ module uart
                 end else
                     txPinRegister <= 1;
             end
+
+            // Start bit: pulls the line low for one full bit period, then load the next
+            // byte to send from memory and resets the bit index
             TX_STATE_START_BIT: begin
                 txPinRegister <= 0;
                 if ((txCounter + 1) == DELAY FRAMES) begin
                     txState <= TX_STATE_WRITE;
-                    dataOut <= testMemory[txByteCounter]; // puts the next byte into dataOut
-                    txBitNumber <= 0; // resets to 0
+                    dataOut <= testMemory[txByteCounter]; // loads the current byte to be sent into the shift register
+                    txBitNumber <= 0; // resets the bit counter to start sending the first bit of the byte
                     txCounter <= 0;
                 end else
                     txCounter <= txCounter + 1;
             end
+
+            // Write: drive each data bit (LSB first, standard UART order)
+            // for one full bit period each, then advence to the next bit or,
+            // once all 8 bits are sent, move on to the stop bit state
             TX_STATE_WRITE: begin
-                txPinRegister <= dataOut[txBitNumber];
-                // sets the tx pin to the current bit of the current byte
+                txPinRegister <= dataOut[txBitNumber]; // sends the current bit of the byte, LSB first
                 if ((txCounter + 1) == DELAY_FRAMES) begin
                     // checks if we're on the last bit --> stop
                     // else, increments the bit number and keeps the current state
@@ -178,11 +191,13 @@ module uart
                 end else 
                     txCounter <= txCounter + 1;
             end
+
+            // Stop bit: drive the line high for one full bit period. Once done,
+            // either move onto the next byte in memory, or, if this was the last byte,
+            // go wait in the debounce state
             TX_STATE_STOP_BIT: begin
                 txPinRegister <= 1;
                 if ((txCounter + 1) == DELAY_FRAMES) begin
-                    // after waiting DELAY_FRAMES, checks if there are any other bytes to send
-                    // repeats if there are, goes to the debounce state if not
                     if (txByteCounter == MEMORY_LENGTH - 1) begin
                         txState <= TX_STATE_DEBOUNCE;
                     end else begin
@@ -193,15 +208,18 @@ module uart
                 end else 
                     txCounter <= txCounter + 1;
             end
+
+            // Debounce: after finishing transmission, wait a long fixed delay (2^23-1 cyles)
+            // to avoid re-triggering on switch bounce (rapidly opens/closes several times when pressed or released),
+            // then require the button to be released (btn == 1, i.e. not pressed) before
+            // returning to idle. This guarantees exactly one transmission per physical button press
             TX_STATE_DEBOUNCE: begin
-                if (txCounter == 23'b111111111111111111) begin
+                if (txCounter == 23'b111111111111111111111) begin // correction: original literal had only 21 ones for a 23-bit constant; corrected to 23 bits
                     if (btn1 == 1)
                         txState <= TX_STATE_IDLE;
                 end else
                     txCounter <= txCounter + 1;
             end
-            // waits a minimum time on top of sending time and makes sure the button is released after this
-            // ensures that for each button press, only one transmission event
         endcase
     end
 
